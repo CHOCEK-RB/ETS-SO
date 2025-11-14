@@ -1,0 +1,3 @@
+[workspace]
+resolver = "3"
+members = ["crates/ets", "crates/ets_sched", "crates/rbtree", "crates/sys_probe"]
