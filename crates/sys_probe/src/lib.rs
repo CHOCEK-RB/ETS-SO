@@ -158,4 +158,21 @@ mod tests {
         assert!(sysinfo.processes.len() > 0);
         assert!(sysinfo.quantum == 100);
     }
+
+    #[test]
+    fn process_builder() {
+        let process = Process::builder()
+            .name("test".to_string())
+            .pid(1)
+            .run_time(0)
+            .memory(0)
+            .ram(0)
+            .build();
+
+        assert!(process.name == "test");
+        assert!(process.pid == 1);
+        assert!(process.run_time == 0);
+        assert!(process.memory == 0);
+        assert!(process.ram == 0);
+    }
 }
