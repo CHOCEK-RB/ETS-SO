@@ -1,8 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-};
-use sysinfo::{ProcessStatus, System};
+use std::{collections::HashMap, fs, num::ParseIntError};
+pub use sysinfo::ProcessStatus;
+use sysinfo::System;
 
 const NICE_COL: usize = 18;
 const PRIO_COL: usize = 17;
@@ -13,19 +11,61 @@ pub struct Process {
     pub name: String,
     pub pid: u32,
     pub run_time: u64,
-    pub nice: i16,
-    pub priority: i16,
-    pub rt_priority: u16,
     pub ram: u64,
-
+    pub nice: Option<i16>,
+    pub status: Option<ProcessStatus>,
+    pub priority: Option<i16>,
+    pub rt_priority: Option<u16>,
     stat: Vec<String>,
     // TODO: add more
+}
+
+impl Process {
+    pub fn builder() -> ProcessBuilder {
+        ProcessBuilder::new()
+    }
+
+    fn read_stat(&mut self) {
+        if let Ok(stat) = fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
+            self.stat = stat.split_whitespace().map(|s| s.to_string()).collect();
+        }
+    }
+
+    fn get_nice(&mut self) -> Result<i16, ParseIntError> {
+        let nice = self.stat[NICE_COL].parse::<i16>();
+        nice
+    }
+    fn get_rt_priority(&mut self) -> Result<u16, ParseIntError> {
+        let rt_prio = self.stat[RT_PRIO_COL].parse::<u16>();
+        rt_prio
+    }
+
+    fn get_priority(&mut self) -> Result<i16, ParseIntError> {
+        let priority = self.stat[PRIO_COL].parse::<i16>();
+        priority
+    }
+
+    pub fn refresh(&mut self) {
+        self.read_stat();
+        if self.stat.len() > 15 {
+            if self.priority.is_none() {
+                self.priority = Some(self.get_priority().unwrap_or(0));
+            }
+            if self.rt_priority.is_none() {
+                self.rt_priority = Some(self.get_rt_priority().unwrap_or(0));
+            }
+            if self.nice.is_none() {
+                self.nice = Some(self.get_nice().unwrap_or(0));
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct ProcessBuilder {
     name: Option<String>,
     pid: Option<u32>,
+    status: Option<ProcessStatus>,
     run_time: Option<u64>,
     ram: Option<u64>,
 }
@@ -35,6 +75,7 @@ impl ProcessBuilder {
         ProcessBuilder {
             name: None,
             pid: None,
+            status: None,
             run_time: None,
             ram: None,
         }
@@ -60,41 +101,23 @@ impl ProcessBuilder {
         self
     }
 
+    fn status(&mut self, status: ProcessStatus) -> &mut Self {
+        self.status = Some(status);
+        self
+    }
+
     fn build(&self) -> Process {
         Process {
             name: self.name.clone().unwrap(),
             pid: self.pid.unwrap(),
             run_time: self.run_time.unwrap(),
-            nice: 0,
-            priority: 0,
-            rt_priority: 0,
+            nice: None,
+            status: self.status,
+            priority: None,
+            rt_priority: None,
             ram: self.ram.unwrap(),
             stat: Vec::new(),
         }
-    }
-}
-
-impl Process {
-    pub fn builder() -> ProcessBuilder {
-        ProcessBuilder::new()
-    }
-
-    fn read_stat(&mut self) {
-        if let Ok(stat) = fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
-            self.stat = stat.split_whitespace().map(|s| s.to_string()).collect();
-        }
-    }
-
-    fn set_nice(&mut self) {
-        self.nice = self.stat[NICE_COL].parse::<i16>().unwrap();
-    }
-
-    fn set_priority(&mut self) {
-        self.priority = self.stat[PRIO_COL].parse::<i16>().unwrap();
-    }
-
-    fn set_rt_priority(&mut self) {
-        self.rt_priority = self.stat[RT_PRIO_COL].parse::<u16>().unwrap_or(0);
     }
 }
 
@@ -126,32 +149,37 @@ impl SysProbe {
     pub fn refresh_processes(&mut self) {
         self.sys.refresh_all();
 
-        let mut current_pids = HashSet::new();
+        let live_pids: std::collections::HashSet<u32> = self
+            .sys
+            .processes()
+            .keys()
+            .map(|pid| pid.as_u32())
+            .collect();
+
+        self.processes.retain(|pid, _| live_pids.contains(pid));
 
         for (pid, process) in self.sys.processes() {
-            if process.status() == ProcessStatus::Dead || process.status() == ProcessStatus::Zombie
-            {
-                continue;
+            let pid_u32 = pid.as_u32();
+
+            match process.status() {
+                ProcessStatus::Dead | ProcessStatus::Zombie => {
+                    self.processes.remove(&pid_u32);
+                    continue;
+                }
+                _ => {}
             }
 
-            current_pids.insert(pid.as_u32());
-
-            let mut _process = Process::builder()
+            let mut process_entry = Process::builder()
                 .name(process.name().to_str().unwrap().to_string())
-                .pid(pid.as_u32())
+                .pid(pid_u32)
                 .run_time(process.run_time())
+                .status(process.status())
                 .ram(process.memory())
                 .build();
 
-            _process.read_stat();
-            _process.set_nice();
-            _process.set_priority();
-            _process.set_rt_priority();
-
-            self.processes.insert(pid.as_u32(), _process);
+            process_entry.refresh();
+            self.processes.insert(pid_u32, process_entry);
         }
-
-        self.processes.retain(|&pid, _| current_pids.contains(&pid));
     }
 }
 
