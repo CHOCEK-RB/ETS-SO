@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::{collections::HashMap, fs};
-use sysinfo::System;
+use sysinfo::{ProcessStatus, System};
 
 pub struct Process {
     pub name: String,
@@ -111,6 +111,7 @@ impl SysProbe {
 
     pub fn init(&mut self) {
         self.set_quantum();
+        self.refresh_processes();
     }
 
     pub fn set_quantum(&mut self) {
@@ -118,9 +119,16 @@ impl SysProbe {
         self.quantum = timeslice.trim().parse::<u32>().unwrap();
     }
 
-    pub fn refresh_all(&mut self) {
+    pub fn refresh_processes(&mut self) {
         self.sys.refresh_all();
         for (pid, process) in self.sys.processes() {
+            if process.status() == ProcessStatus::Dead
+                || process.status() == ProcessStatus::Zombie
+                || process.status() == ProcessStatus::Sleep
+            {
+                continue;
+            }
+
             let mut _process = Process::builder()
                 .name(process.name().to_str().unwrap().to_string())
                 .pid(pid.as_u32())
@@ -146,8 +154,6 @@ mod tests {
     fn process() {
         let mut sysinfo = SysProbe::new();
         sysinfo.init();
-
-        sysinfo.refresh_all();
 
         assert!(sysinfo.processes.len() > 0);
         assert!(sysinfo.quantum == 100);
