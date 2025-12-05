@@ -16,6 +16,8 @@ use sys_probe::{Process, SysProbe};
 pub struct App {
     pub sys: SysProbe,
     pub items: Vec<Process>,
+    pub filtered: Vec<Process>,
+    pub filter: String,
     pub table_state: TableState,
     pub exit: bool,
 }
@@ -25,6 +27,8 @@ impl App {
         let mut app = App {
             sys: SysProbe::new(),
             items: Vec::new(),
+            filtered: Vec::new(),
+            filter: String::new(),
             table_state: TableState::default(),
             exit: false,
         };
@@ -37,6 +41,23 @@ impl App {
         self.sys.refresh_processes();
         self.items = self.sys.processes.values().cloned().collect();
         self.items.sort_by_key(|p| p.run_time);
+        self.apply_filter();
+    }
+
+    pub fn apply_filter(&mut self) {
+        if self.filter.is_empty() {
+            self.filtered = self.items.clone();
+            return;
+        }
+
+        let text = self.filter.to_lowercase();
+
+        self.filtered = self
+            .items
+            .iter()
+            .cloned()
+            .filter(|p| p.name.to_lowercase().contains(&text) || p.pid.to_string().contains(&text))
+            .collect();
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -57,6 +78,14 @@ impl App {
                             KeyCode::Char('q') => self.exit = true,
                             KeyCode::Down => self.next_row(),
                             KeyCode::Up => self.previous_row(),
+                            KeyCode::Char(c) => {
+                                self.filter.push(c);
+                                self.apply_filter();
+                            }
+                            KeyCode::Backspace => {
+                                self.filter.pop();
+                                self.apply_filter();
+                            }
                             _ => {}
                         }
                     }
@@ -85,20 +114,26 @@ impl App {
             .add_modifier(Modifier::BOLD);
         let selected_style = Style::default().add_modifier(Modifier::REVERSED);
 
-        let header = ["PID", "Name", "Nice", "Prio", "RT Prio", "RAM", "Run Time"]
-            .into_iter()
-            .map(Cell::from)
-            .collect::<Row>()
-            .style(header_style)
-            .height(1);
+        let header = [
+            "PID", "Name", "Status", "Nice", "Prio", "RT Prio", "RAM", "Run Time",
+        ]
+        .into_iter()
+        .map(Cell::from)
+        .collect::<Row>()
+        .style(header_style)
+        .height(1);
 
-        let rows = self.items.iter().map(|item| {
+        let rows = self.filtered.iter().map(|item| {
             let cells = vec![
                 Cell::from(item.pid.to_string()),
                 Cell::from(item.name.clone()),
-                Cell::from(item.nice.to_string()),
-                Cell::from(item.priority.to_string()),
-                Cell::from(item.rt_priority.to_string()),
+                Cell::from(match item.status {
+                    Some(v) => v.to_string(),
+                    None => "Unknown".to_string(),
+                }),
+                Cell::from(item.nice.unwrap_or(0).to_string()),
+                Cell::from(item.priority.unwrap_or(0).to_string()),
+                Cell::from(item.rt_priority.unwrap_or(0).to_string()),
                 Cell::from(format!("{:.1} MB", item.ram as f64 / 1024.0 / 1024.0)),
                 Cell::from(item.run_time.to_string()),
             ];
@@ -110,6 +145,7 @@ impl App {
             [
                 Constraint::Length(8),
                 Constraint::Min(20),
+                Constraint::Length(12),
                 Constraint::Length(6),
                 Constraint::Length(6),
                 Constraint::Length(9),
